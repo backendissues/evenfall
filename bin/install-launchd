@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Install (or remove) a launchd agent that runs `evenfall sync --scheduled` every 60 s, so capture catches up even if the watcher died.
+Usage: install-launchd [--uninstall] [--dry-run]"""
+import argparse, os, plistlib, subprocess, sys
+
+LABEL = "com.evenfall.sync"
+HOME = os.path.expanduser("~")
+PLIST = os.path.join(HOME, "Library", "LaunchAgents", LABEL + ".plist")
+BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "evenfall")
+LOG = os.path.join(HOME, ".evenfall", "state", "launchd.log")
+
+a = argparse.ArgumentParser()
+a.add_argument("--uninstall", action="store_true")
+a.add_argument("--dry-run", action="store_true")
+a = a.parse_args()
+uid = str(os.getuid())
+
+if a.uninstall:
+    subprocess.run(["launchctl", "bootout", "gui/" + uid, PLIST], capture_output=True)
+    if os.path.exists(PLIST):
+        os.remove(PLIST)
+    print("removed", PLIST)
+    sys.exit(0)
+
+plist = {"Label": LABEL, "ProgramArguments": [sys.executable, BIN, "sync", "--scheduled"], "StartInterval": 60,
+         "StandardOutPath": LOG, "StandardErrorPath": LOG, "ProcessType": "Background", "Nice": 10, "RunAtLoad": True}
+if a.dry_run:
+    print(plistlib.dumps(plist).decode())
+    sys.exit(0)
+os.makedirs(os.path.dirname(PLIST), exist_ok=True)
+os.makedirs(os.path.dirname(LOG), exist_ok=True)
+with open(PLIST, "wb") as f:
+    plistlib.dump(plist, f)
+subprocess.run(["launchctl", "bootout", "gui/" + uid, PLIST], capture_output=True)   # reload cleanly if already loaded
+r = subprocess.run(["launchctl", "bootstrap", "gui/" + uid, PLIST], capture_output=True, text=True)
+print("installed", PLIST, "| launchctl:", (r.stderr or "ok").strip())
+sys.exit(r.returncode)
