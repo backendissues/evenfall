@@ -4,7 +4,6 @@ Order of operations is what makes it crash-safe:  write records -> flush to disk
 A crash in between re-reads a block and writes duplicate records, which the index drops by id.
 Only complete (newline-terminated) lines are consumed; a half-written last line waits for the next run.
 """
-import fcntl
 import hashlib
 import json
 import os
@@ -13,7 +12,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 
-from . import config, wal
+from . import _compat, config, wal
 from .redact import redact_line
 
 _TS = re.compile(r'"timestamp":"(\d{4}-\d{2}-\d{2})')
@@ -41,7 +40,7 @@ def sources():
 
 def _load_cursors() -> dict:
     try:
-        return json.loads((config.STATE / CURSOR_FILE).read_text())
+        return json.loads((config.STATE / CURSOR_FILE).read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         return {}
 
@@ -49,13 +48,13 @@ def _load_cursors() -> dict:
 def _save_cursors(cur: dict) -> None:
     config.STATE.mkdir(parents=True, exist_ok=True)
     tmp = config.STATE / (CURSOR_FILE + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _compat.O_BINARY, 0o600)
     try:
         os.write(fd, json.dumps(cur, separators=(",", ":")).encode())
-        wal._full_sync(fd)
+        _compat.full_sync(fd)
     finally:
         os.close(fd)
-    os.replace(tmp, config.STATE / CURSOR_FILE)
+    _compat.replace(tmp, config.STATE / CURSOR_FILE)
 
 
 def _head_hash(path, n: int) -> str:
@@ -150,8 +149,11 @@ def ingest_all() -> dict:
     config.STATE.mkdir(parents=True, exist_ok=True)
     lock = os.open(config.STATE / "lock", os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        busy = not _compat.try_lock(lock)
+    except BaseException:
+        os.close(lock)
+        raise
+    if busy:
         os.close(lock)
         return {"skipped": "another ingest is running"}
     t0 = time.time()

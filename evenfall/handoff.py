@@ -26,7 +26,7 @@ def memories() -> list:
         return out
     for p in files:
         try:
-            text = p.read_text()
+            text = p.read_text(encoding="utf-8")
             slug = p.stem[len("project_"):]
             words = [w for w in re.split(r"[_-]+", slug) if w and w not in GENERIC]
             if not words:

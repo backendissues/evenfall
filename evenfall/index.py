@@ -4,13 +4,12 @@ Chunks are the 'narrative layer': what you said, what the assistant said, each t
 each result. Everything is a verbatim excerpt, so nothing here can be invented.
 """
 import collections
-import fcntl
 import json
 import os
 import re
 import sqlite3
 
-from . import config, wal
+from . import _compat, config, wal
 
 SCHEMA = """
 create table if not exists events(id text primary key, src text, off integer, ts text, type text,
@@ -105,7 +104,7 @@ def index_all(db: sqlite3.Connection = None) -> dict:
     config.STATE.mkdir(parents=True, exist_ok=True)
     lock = os.open(config.STATE / "index.lock", os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        _compat.lock(lock)
         return _index_all(db)
     finally:
         os.close(lock)
@@ -206,4 +205,4 @@ def find(db, text: str, k=8, kind=None, project=None, since=None, budget=3200, e
 
 
 def project_key(cwd: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    return config.project_key(cwd)

@@ -3,14 +3,13 @@
 Rules for everything in here: never raise into Claude, never print anything except the SessionStart brief,
 never take long. Any failure means we print nothing and exit 0.
 """
-import fcntl
 import json
 import os
 import subprocess
 import sys
 import time
 
-from . import brief, config, index, ingest
+from . import _compat, brief, config, index, ingest
 
 ERR_LOG_MAX = 200 * 1024
 IDLE_EXIT_SECONDS = 15 * 60
@@ -29,8 +28,8 @@ def _fail(where: str) -> None:
         config.STATE.mkdir(parents=True, exist_ok=True)
         log = config.STATE / "hook-errors.log"
         if log.exists() and log.stat().st_size > ERR_LOG_MAX:
-            log.replace(config.STATE / "hook-errors.log.1")
-        with open(log, "a") as f:
+            _compat.replace(log, config.STATE / "hook-errors.log.1")
+        with open(log, "a", encoding="utf-8") as f:
             f.write("%s %s\n%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), where, traceback.format_exc()))
     except Exception:
         pass
@@ -52,7 +51,7 @@ def _record_session(payload: dict) -> None:
     d = config.STATE / "current"
     d.mkdir(parents=True, exist_ok=True)
     (d / (sid + ".json")).write_text(json.dumps({"cwd": payload.get("cwd") or os.getcwd(), "ts": time.time(),
-                                                 "transcript": payload.get("transcript_path")}))
+                                                 "transcript": payload.get("transcript_path")}), encoding="utf-8")
 
 
 def current_session(cwd: str):
@@ -61,7 +60,7 @@ def current_session(cwd: str):
     d = config.STATE / "current"
     try:
         for p in d.glob("*.json"):
-            m = json.loads(p.read_text())
+            m = json.loads(p.read_text(encoding="utf-8"))
             if m.get("cwd") == cwd and time.time() - m.get("ts", 0) < 36 * 3600:
                 if best is None or m["ts"] > best[0]:
                     best = (m["ts"], p.stem)
@@ -74,15 +73,12 @@ def start_watcher() -> None:
     lock = config.STATE / "watcher.lock"
     try:
         fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)      # held => a watcher is already running
-        except BlockingIOError:
+        if not _compat.try_lock(fd):                              # held => a watcher is already running
             os.close(fd)
             return
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _compat.unlock(fd)
         os.close(fd)
-        subprocess.Popen([sys.executable, str(brief.BIN), "watch"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        _compat.spawn_detached(brief.command("watch", background=True))
     except Exception:
         pass
 
@@ -106,8 +102,7 @@ def hook_sync(final: bool = False) -> None:
         _stdin_json()
         if disabled():
             return
-        subprocess.Popen([sys.executable, str(brief.BIN), "sync"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        _compat.spawn_detached(brief.command("sync", background=True))
     except Exception:
         _fail("hook sync")
 
@@ -125,9 +120,7 @@ def watch() -> None:
     if disabled():
         return
     fd = os.open(config.STATE / "watcher.lock", os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    if not _compat.try_lock(fd):
         return
     last_sig, last_change, last_brief, dirty = None, time.time(), 0.0, False
     paths, last_scan = [], 0.0
