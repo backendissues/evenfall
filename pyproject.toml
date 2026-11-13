@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evenfall"
+version = "0.2.0"
+description = "Local session memory for Claude Code: archive, search, decision ledger, handoff drafts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.scripts]
+evenfall = "evenfall.cli:main"
+
+[tool.setuptools]
+packages = ["evenfall"]
