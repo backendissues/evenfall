@@ -1,0 +1,6 @@
+archive-raw/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+bin/engram

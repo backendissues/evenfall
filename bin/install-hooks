@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Add (or remove) the evenfall hooks in Claude Code's user settings. Idempotent; keeps a timestamped backup.
+Usage: install-hooks [--uninstall] [--settings PATH]"""
+import argparse, json, os, shutil, sys, time
+
+BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "evenfall")
+EVENTS = {"SessionStart": ("start", 10), "PreCompact": ("sync", 5), "SessionEnd": ("end", 5)}
+
+a = argparse.ArgumentParser()
+a.add_argument("--uninstall", action="store_true")
+a.add_argument("--settings", default=os.path.expanduser("~/.claude/settings.json"))
+a = a.parse_args()
+
+d = json.load(open(a.settings))
+shutil.copy2(a.settings, "%s.bak-%s" % (a.settings, time.strftime("%Y%m%d-%H%M%S")))
+hooks = d.setdefault("hooks", {})
+for ev, (arg, timeout) in EVENTS.items():
+    cmd = "%s hook %s" % (BIN, arg)
+    # drop any previous evenfall entry for this event, keep everything else
+    kept = [g for g in hooks.get(ev, []) if not any(h.get("command", "").startswith(BIN) or "/cl/engram/bin/engram" in h.get("command", "") for h in g.get("hooks", []))]
+    if not a.uninstall:
+        kept.append({"hooks": [{"type": "command", "command": cmd, "timeout": timeout}]})
+    if kept:
+        hooks[ev] = kept
+    else:
+        hooks.pop(ev, None)
+if not hooks:
+    d.pop("hooks")
+json.dump(d, open(a.settings, "w"), indent=2)
+json.load(open(a.settings))
+print(("removed from " if a.uninstall else "installed in ") + a.settings)
