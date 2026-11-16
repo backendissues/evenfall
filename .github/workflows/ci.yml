@@ -1,0 +1,30 @@
+name: tests
+on:
+  push:
+    branches: [main, windows-support]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest
+      - run: python -m pytest tests -q
+      - name: CLI smoke test (separate home, no real data)
+        shell: bash
+        run: |
+          export EVENFALL_HOME="$RUNNER_TEMP/ef-home" EVENFALL_SRC="$RUNNER_TEMP/ef-src" EVENFALL_SETTINGS="$RUNNER_TEMP/settings.json"
+          mkdir -p "$EVENFALL_SRC"
+          python -m evenfall install hooks
+          python -m evenfall sync
+          python -m evenfall doctor || true
+          python -m evenfall install hooks --uninstall

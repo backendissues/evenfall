@@ -17,20 +17,44 @@ After a `/clear`, or three weeks away, a fresh session already knows where thing
 - **Handoff drafts.** `evenfall handoff` drafts a project-memory update from what changed since the memory was last edited, and the card
   warns when a memory file is stale. You or Claude approve it; Evenfall never writes your memory files.
 - **Safety net.** Hook failures are logged, `evenfall doctor` checks health, `evenfall off` is a kill switch,
-  and an optional launchd agent catches up every 60 s.
+  and an optional scheduled task (launchd on macOS, Task Scheduler on Windows) catches up every 60 s.
 
-## Install (macOS, Python 3.10+, no dependencies beyond the standard library)
+## Install (macOS and Windows 10/11, Python 3.10+, no dependencies beyond the standard library)
 
+macOS:
 ```
 git clone <this repo> ~/evenfall && cd ~/evenfall
-bin/evenfall sync            # one-time backfill of existing sessions
-bin/install-hooks            # SessionStart, PreCompact, SessionEnd in ~/.claude/settings.json (timestamped backup)
-bin/install-launchd          # optional: catch-up every 60 s
+bin/evenfall sync                  # one-time backfill of existing sessions
+bin/evenfall install hooks         # SessionStart, PreCompact, SessionEnd in ~/.claude/settings.json (timestamped backup)
+bin/evenfall install schedule      # optional: catch-up every 60 s (launchd)
 bin/evenfall doctor
 ```
 
-Remove with `bin/install-hooks --uninstall` and `bin/install-launchd --uninstall`. Your data in `~/.evenfall` is left alone.
+Windows (PowerShell or Command Prompt; the `py` launcher comes with python.org Python):
+```
+git clone <this repo> %USERPROFILE%\evenfall
+cd %USERPROFILE%\evenfall
+py -3 -m evenfall sync
+py -3 -m evenfall install hooks
+py -3 -m evenfall install schedule    # optional: a scheduled task, every minute, runs without a console window
+py -3 -m evenfall doctor
+```
+Or install the command once with `pip install .` (or `pipx install .`) and use plain `evenfall ...` everywhere.
+
+`bin/install-hooks` and `bin/install-launchd` still work and do the same as the `install` subcommands.
+Remove with `evenfall install hooks --uninstall` and `evenfall install schedule --uninstall`. Your data in `~/.evenfall` is left alone.
 Set `cleanupPeriodDays` high in Claude Code's settings, or it may delete transcripts before they are archived.
+
+The hook command is written as a quoted interpreter-plus-script path with forward slashes, so it works from Git Bash and
+from paths with spaces. The scheduled catch-up is optional: the resident watcher already captures sessions.
+
+## Windows notes
+
+Windows support is covered by automated tests on `windows-latest` (file locking, crash recovery, path handling, hook and task
+commands) but has had less real-world use than macOS. If a hook does not fire, run `evenfall doctor` and check
+`%USERPROFILE%\.evenfall\state\hook-errors.log`. Windows keeps the transcript folder under `%USERPROFILE%\.claude\projects`,
+with project folders named by replacing every non-alphanumeric character of the path with `-` (`C:\Users\jo\app` becomes `C--Users-jo-app`).
+Scheduled tasks created this way run while you are logged in; on a laptop, Task Scheduler may pause them on battery.
 
 ## Principles
 
@@ -40,9 +64,9 @@ Claude is the translator: it turns your question into keywords and reads the res
 ## Limits
 
 Reads Claude Code's transcript format, which can change. Search works best with keywords, not vague questions.
-Product folders are inferred from common project paths (`Desktop`, `Documents`, `Projects`, `code`, `dev`, `src`, `work`).
+Product folders are inferred from common project paths (`Desktop`, `Documents`, `Projects`, `code`, `dev`, `src`, `work`), written with `/` or `\\`.
 Screenshots are stored whole, so the archive is large until media de-duplication lands.
 
 ## Tests
 
-`python3 -m pytest tests`
+`python3 -m pytest tests` (Windows: `py -3 -m pytest tests`). CI runs them on Ubuntu, macOS and Windows.
