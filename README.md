@@ -23,7 +23,7 @@ After a `/clear`, or three weeks away, a fresh session already knows where thing
 
 macOS:
 ```
-git clone <this repo> ~/evenfall && cd ~/evenfall
+git clone https://github.com/backendissues/evenfall.git ~/evenfall && cd ~/evenfall
 bin/evenfall sync                  # one-time backfill of existing sessions
 bin/evenfall install hooks         # SessionStart, PreCompact, SessionEnd in ~/.claude/settings.json (timestamped backup)
 bin/evenfall install schedule      # optional: catch-up every 60 s (launchd)
@@ -32,7 +32,7 @@ bin/evenfall doctor
 
 Windows (PowerShell or Command Prompt; the `py` launcher comes with python.org Python):
 ```
-git clone <this repo> %USERPROFILE%\evenfall
+git clone https://github.com/backendissues/evenfall.git %USERPROFILE%\evenfall
 cd %USERPROFILE%\evenfall
 py -3 -m evenfall sync
 py -3 -m evenfall install hooks
