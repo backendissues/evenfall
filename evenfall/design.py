@@ -63,13 +63,13 @@ DEFAULT_ALIASES = {}     # old or staging names of the same product; add yours w
 NEGATOR = re.compile(r"\b(?:not|no|dont|don'?t|never|without|skip|cannot|can ?not|can'?t)\b", re.I)
 MOBILE_REJECT = re.compile(r"\b(?:not|dont|don'?t|do not|never|no need|skip|without|cannot|can ?not)\b[^.!?\n]{0,40}\b(?:worry|care|bother|support|build|design|open|use|need)\b[^.!?\n]{0,40}\bmobile\b", re.I)
 QUESTION_START = re.compile(r"^(?:should i|should we|can we|can you|could you|do we|do you|is there|are there|how|what|why|which|where|when|who|does|did)\b", re.I)
-PRODUCT_PATH = re.compile(r"/(?:Desktop|Documents|Projects|projects|code|dev|src|work)/(?:cl/)?([A-Za-z0-9_.-]+)")
+PRODUCT_PATH = re.compile(r"[\\/](?:Desktop|Documents|Projects|projects|code|dev|src|work)(?:\\{1,2}|/)(?:cl(?:\\{1,2}|/))?([A-Za-z0-9_.-]+)")   # / and \ (a JSON-escaped \\ too)
 SKIP = ("<", "[", "Caveat", "Tool loaded", "Warning:")
 
 
 def aliases() -> dict:
     try:
-        return {**DEFAULT_ALIASES, **json.loads((config.STATE / "aliases.json").read_text())}
+        return {**DEFAULT_ALIASES, **json.loads((config.STATE / "aliases.json").read_text(encoding="utf-8"))}
     except (OSError, ValueError):
         return dict(DEFAULT_ALIASES)
 
@@ -82,11 +82,11 @@ def set_alias(db, old: str, new: str) -> None:
     config.STATE.mkdir(parents=True, exist_ok=True)
     cur = {}
     try:
-        cur = json.loads((config.STATE / "aliases.json").read_text())
+        cur = json.loads((config.STATE / "aliases.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
     cur[old] = new
-    (config.STATE / "aliases.json").write_text(json.dumps(cur, indent=1))
+    (config.STATE / "aliases.json").write_text(json.dumps(cur, indent=1), encoding="utf-8")
     db.executescript(SCHEMA)
     _resolve(db)
     db.commit()

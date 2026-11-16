@@ -2,11 +2,31 @@
 import collections
 import os
 import re
-from pathlib import Path
+import shlex
+import sys
+from pathlib import Path, PureWindowsPath
 
-from . import config, design, doctor, handoff, index, shell
+from . import _compat, config, design, doctor, handoff, index, shell
 
 BIN = str(Path(__file__).resolve().parent.parent / "bin" / "evenfall")
+HOOK_CMD = re.compile(r"(?:^|[\s\\/\"'])(?:evenfall|engram)[\"']?\s+hook\s+[a-z]+\b")   # an evenfall hook command in any install form
+
+
+def command(*args, background: bool = False) -> list:
+    """argv that runs this install of evenfall: the interpreter plus the launcher script (no PYTHONPATH or install needed)."""
+    return [_compat.python_exe(background), BIN, *args]
+
+
+def shell_command(*args) -> str:
+    """The same as one string for a shell (Claude's Bash or Git Bash on Windows) and for settings.json. Quoted, forward slashes."""
+    if _compat.IS_WINDOWS:
+        parts = [PureWindowsPath(p).as_posix() if i < 2 else p for i, p in enumerate(command(*args))]
+        return " ".join('"%s"' % p if i < 2 else p for i, p in enumerate(parts))
+    return " ".join([shlex.quote(BIN), *args])
+
+
+def is_hook_command(cmd: str) -> bool:
+    return bool(HOOK_CMD.search(cmd or ""))
 DOMAIN = re.compile(r"\b((?:[a-z0-9][a-z0-9-]{1,40}\.)+(?:com|in|io|net|org|online|space|click|sbs|shop|app|dev|ai|co|xyz|site|tech))\b")
 NOISE = {"github.com", "anthropic.com", "claude.ai", "claude.com", "example.com", "google.com", "npmjs.com", "wikimedia.org", "commons.wikimedia.org", "gmail.com",
          "python.org", "w3.org", "schema.org", "googleapis.com", "gstatic.com", "mozilla.org", "apple.com"}
@@ -113,7 +133,7 @@ def build_project(db, project: str) -> str:
             because = ("why: " + why) if why else ("asked: " + req[0] if req else "")
             lines.append("- [%d] %s %s %s: %s | %s" % (lid, ts[:10], st, op or tool, _clip(summ, 90), _clip(because, 100)))
         if edits:
-            lines.append("  recent file edits: " + ", ".join("%s [%d]" % (e[2].split("/")[-1], e[0]) for e in edits))
+            lines.append("  recent file edits: " + ", ".join("%s [%d]" % (config.path_name(e[2]), e[0]) for e in edits))
         lines.append("")
 
     lines.append("Recent sessions (newest first):")
@@ -144,17 +164,17 @@ def build_all(db) -> int:
     d.mkdir(parents=True, exist_ok=True)
     projects = [p for (p,) in db.execute("select project from events group by project order by max(ts) desc")]
     for p in projects:
-        (d / (p + ".txt")).write_text(build_project(db, p))
+        (d / (p + ".txt")).write_text(build_project(db, p), encoding="utf-8")
     idx = ["Projects with history (newest first):"]
     for p, n, last in db.execute("select project, count(*), max(ts) from events where side=0 group by project order by max(ts) desc limit 12"):
         idx.append("- %s  %d events, last %s" % (p.replace(config.HOME_KEY + "-", "~/"), n, (last or "")[:10]))
-    (d / "_all.txt").write_text("\n".join(idx))
+    (d / "_all.txt").write_text("\n".join(idx), encoding="utf-8")
     return len(projects)
 
 
 def _events(project: str) -> int:
     try:
-        m = re.match(r"Project .*?: (\d+) events", (config.STATE / "briefs" / (project + ".txt")).read_text())
+        m = re.match(r"Project .*?: (\d+) events", (config.STATE / "briefs" / (project + ".txt")).read_text(encoding="utf-8"))
         return int(m.group(1)) if m else 0
     except OSError:
         return 0
@@ -164,8 +184,11 @@ def _mentions(cwd: str, files):
     """Projects whose history mentions this folder (work often runs from a parent folder)."""
     try:
         db = index.connect()
-        rows = db.execute("select project, count(*) c from chunks where kind in ('call','user','assistant') "
-                          "and instr(text, ?) > 0 group by project order by c desc limit 2", (cwd.rstrip("/") + "/",)).fetchall()
+        base = cwd.rstrip("\\/")
+        esc = base.replace("\\", "\\\\")                  # tool calls are stored as JSON, where every \ in a path is doubled
+        forms = list(dict.fromkeys([base + "/", base.replace("\\", "/") + "/", base + "\\", esc + "\\\\"]))
+        rows = db.execute("select project, count(*) c from chunks where kind in ('call','user','assistant') and (%s) "
+                          "group by project order by c desc limit 2" % " or ".join("instr(text, ?) > 0" for _ in forms), forms).fetchall()
         db.close()
         return [p for p, c in rows if p in files and c >= 3]
     except Exception:
@@ -175,7 +198,7 @@ def _mentions(cwd: str, files):
 def show(cwd: str) -> str:
     d = config.STATE / "briefs"
     key = index.project_key(cwd)
-    parts = [HINT % {"bin": BIN}, ""]
+    parts = [HINT % {"bin": shell_command()}, ""]
     try:
         files = sorted(p.stem for p in d.glob("*.txt") if p.stem != "_all")
     except OSError:
@@ -195,15 +218,15 @@ def show(cwd: str) -> str:
             hit = related
         else:
             try:
-                parts.append((d / "_all.txt").read_text())
+                parts.append((d / "_all.txt").read_text(encoding="utf-8"))
             except OSError:
-                parts.append("No history indexed yet. Run: %s sync" % BIN)
+                parts.append("No history indexed yet. Run: %s sync" % shell_command())
     for i, p in enumerate(hit):
-        card = (d / (p + ".txt")).read_text()
+        card = (d / (p + ".txt")).read_text(encoding="utf-8")
         parts += [card if i == 0 else card[:2600], ""]
     try:
         db = index.connect()
-        prod = design.default_product(db, os.path.basename(cwd.rstrip("/")))
+        prod = design.default_product(db, config.path_name(cwd))
         sec = design.section(db, prod) if prod else ""
         db.close()
     except Exception:

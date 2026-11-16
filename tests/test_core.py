@@ -29,7 +29,7 @@ def line(typ, text=None, ts="2026-11-06T10:00:00.000Z", sess="s1", blocks=None):
 def write_src(name, lines, newline_end=True):
     p = config.SRC / "-tmp-proj" / name
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("\n".join(lines) + ("\n" if newline_end else ""))
+    p.write_text("\n".join(lines) + ("\n" if newline_end else ""), encoding="utf-8", newline="\n")
     return p
 
 
@@ -143,7 +143,7 @@ class IngestTests(Base):
         s1 = ingest.ingest_all()
         self.assertEqual(s1["lines"], 2)
         self.assertEqual(ingest.ingest_all()["lines"], 0)
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(line("user", "third") + "\n")
         self.assertEqual(ingest.ingest_all()["lines"], 1)
         self.assertEqual(len(self.records()), 3)
@@ -151,10 +151,10 @@ class IngestTests(Base):
     def test_partial_line_waits_for_newline(self):
         p = write_src("a.jsonl", [line("user", "one")])
         ingest.ingest_all()
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(line("user", "two")[:30])         # half-written line
         self.assertEqual(ingest.ingest_all()["lines"], 0)
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(line("user", "two")[30:] + "\n")
         self.assertEqual(ingest.ingest_all()["lines"], 1)
         db = index.connect(); index.index_all(db)
@@ -190,13 +190,14 @@ class IngestTests(Base):
                 self.assertEqual(got, 30, "lost or duplicated events after crash at %s" % point)
 
     def test_lock_prevents_double_run(self):
-        import fcntl
+        from evenfall import _compat
         config.STATE.mkdir(parents=True, exist_ok=True)
         fd = os.open(config.STATE / "lock", os.O_WRONLY | os.O_CREAT)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.assertTrue(_compat.try_lock(fd))
         try:
             self.assertIn("skipped", ingest.ingest_all())
         finally:
+            _compat.unlock(fd)
             os.close(fd)
 
 
@@ -275,7 +276,7 @@ class LedgerTests(Base):
         ingest.ingest_all()
         db = index.connect(); index.index_all(db)
         self.assertEqual(db.execute("select status from ledger").fetchone()[0], "pending")
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(tool_result("t1", "sent 3 files") + "\n")
         ingest.ingest_all(); index.index_all(db)
         self.assertEqual(db.execute("select status from ledger").fetchone()[0], "ok")
@@ -524,3 +525,99 @@ class SafetyTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsPortabilityTests(Base):
+    """String- and file-level checks that run everywhere, so the Windows-specific code paths are covered on macOS too."""
+
+    def test_project_key_and_path_name_cover_both_separators(self):
+        self.assertEqual(config.project_key("/Users/jo/app"), "-Users-jo-app")
+        self.assertEqual(config.project_key("C:\\Users\\jo\\app"), "C--Users-jo-app")
+        self.assertEqual(index.project_key("C:\\Users\\jo\\my app"), "C--Users-jo-my-app")
+        for p in ("/Users/jo/app", "/Users/jo/app/", "C:\\Users\\jo\\app", "C:\\Users\\jo\\app\\", "C:/Users/jo/app"):
+            self.assertEqual(config.path_name(p), "app", p)
+
+    def test_product_inferred_from_windows_paths(self):
+        for text in ("/Users/jo/Desktop/cl/AcmeApp/x.py", "C:\\Users\\jo\\Desktop\\cl\\AcmeApp\\x.py",
+                     "C:\\\\Users\\\\jo\\\\Desktop\\\\cl\\\\AcmeApp\\\\x.py", "C:/Users/jo/Desktop/cl/AcmeApp/x.py"):
+            self.assertEqual(design.PRODUCT_PATH.findall(text), ["AcmeApp"], text)
+
+    def test_windows_paths_are_not_taken_for_secrets(self):
+        self.assertFalse(redact_mod._looks_secret("C:\\Users\\jo\\AppData\\Local\\Temp\\x9Zq2Kd7Lp4Wm8NsQ"))
+        self.assertFalse(redact_mod._looks_secret("C:/Users/jo/AppData/Local/Temp/x9Zq2Kd7Lp4Wm8NsQ"))
+
+    def test_lock_is_exclusive_until_released(self):
+        from evenfall import _compat
+        config.STATE.mkdir(parents=True, exist_ok=True)
+        a = os.open(config.STATE / "t.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        b = os.open(config.STATE / "t.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            self.assertTrue(_compat.try_lock(a))
+            self.assertFalse(_compat.try_lock(b))
+            _compat.unlock(a)
+            self.assertTrue(_compat.try_lock(b))
+        finally:
+            os.close(a)
+            os.close(b)
+
+    def test_hook_command_recognised_in_every_install_form(self):
+        for cmd in ("/Users/jo/evenfall/bin/evenfall hook start", "'/Users/jo/my tools/evenfall/bin/evenfall' hook sync",
+                    '"C:/Python312/python.exe" "C:/Users/jo/evenfall/bin/evenfall" hook end', "/old/cl/engram/bin/engram hook start",
+                    "python -m evenfall hook start"):
+            self.assertTrue(brief.is_hook_command(cmd), cmd)
+        for cmd in ("echo hello", "/usr/bin/other-tool hook start", "evenfall find hook start x", ""):
+            self.assertFalse(brief.is_hook_command(cmd), cmd)
+
+    def test_windows_shell_command_is_quoted_with_forward_slashes(self):
+        from evenfall import _compat
+        saved = (_compat.IS_WINDOWS, _compat.python_exe, brief.BIN)
+        try:
+            _compat.IS_WINDOWS = True
+            _compat.python_exe = lambda background=False: "C:\\Program Files\\Python312\\python.exe"
+            brief.BIN = "C:\\Users\\jo smith\\evenfall\\bin\\evenfall"
+            cmd = brief.shell_command("hook", "start")
+            self.assertEqual(cmd, '"C:/Program Files/Python312/python.exe" "C:/Users/jo smith/evenfall/bin/evenfall" hook start')
+            self.assertTrue(brief.is_hook_command(cmd))
+        finally:
+            _compat.IS_WINDOWS, _compat.python_exe, brief.BIN = saved
+
+    def test_task_scheduler_commands(self):
+        from evenfall import _compat, installer
+        saved = (_compat.python_exe, brief.BIN)
+        try:
+            _compat.python_exe = lambda background=False: "C:\\Python312\\pythonw.exe" if background else "C:\\Python312\\python.exe"
+            brief.BIN = "C:\\Users\\jo\\evenfall\\bin\\evenfall"
+            self.assertEqual(installer.schtasks_args(), ["schtasks", "/Create", "/SC", "MINUTE", "/MO", "1", "/TN", "evenfall-sync", "/TR",
+                                                         '"C:\\Python312\\pythonw.exe" "C:\\Users\\jo\\evenfall\\bin\\evenfall" sync --scheduled', "/F"])
+            self.assertEqual(installer.schtasks_args(uninstall=True), ["schtasks", "/Delete", "/TN", "evenfall-sync", "/F"])
+        finally:
+            _compat.python_exe, brief.BIN = saved
+
+    def test_install_hooks_creates_replaces_and_removes_only_ours(self):
+        from evenfall import installer
+        cfg = self.root / ".claude" / "settings.json"
+        installer.install_hooks(cfg)                                               # no settings file yet: created
+        d = json.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(d["hooks"]), ["PreCompact", "SessionEnd", "SessionStart"])
+        other = {"hooks": [{"type": "command", "command": "/usr/bin/other-tool run"}]}
+        old = {"hooks": [{"type": "command", "command": "/old/place/evenfall/bin/evenfall hook start"}]}
+        cfg.write_text(json.dumps({"model": "x", "hooks": {"SessionStart": [other, old]}}), encoding="utf-8")
+        installer.install_hooks(cfg)
+        installer.install_hooks(cfg)                                               # idempotent
+        d = json.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual(d["model"], "x")
+        starts = [h["command"] for g in d["hooks"]["SessionStart"] for h in g["hooks"]]
+        self.assertEqual(len(starts), 2)
+        self.assertIn("/usr/bin/other-tool run", starts)
+        self.assertEqual(sum(brief.is_hook_command(c) for c in starts), 1)
+        self.assertTrue(list(cfg.parent.glob("settings.json.bak-*")))             # a backup of the file that existed
+        installer.install_hooks(cfg, uninstall=True)
+        d = json.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual([h["command"] for g in d["hooks"]["SessionStart"] for h in g["hooks"]], ["/usr/bin/other-tool run"])
+        self.assertNotIn("PreCompact", d["hooks"])
+
+    def test_mentions_finds_a_windows_folder_written_with_backslashes(self):
+        write_src("a.jsonl", [line("user", "open C:\\\\Users\\\\jo\\\\code\\\\Acme\\\\app.py now please, step %d " % i + "x" * 30, ts="2026-11-06T10:00:0%d.000Z" % i) for i in range(4)])
+        ingest.ingest_all()
+        db = index.connect(); index.index_all(db); db.close()
+        self.assertEqual(brief._mentions("C:\\Users\\jo\\code\\Acme", ["-tmp-proj"]), ["-tmp-proj"])

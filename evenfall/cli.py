@@ -12,6 +12,14 @@ def _fmt_hit(r) -> str:
     return "[%d] %s %-9s %s | %s" % (cid, ts[:16].replace("T", " "), kind, project.replace(config.HOME_KEY + "-", "~/")[-28:], snip)
 
 
+def cmd_install(a):
+    from . import installer
+    if a.what == "hooks":
+        print(installer.install_hooks(a.settings, a.uninstall))
+        return 0
+    return installer.install_schedule(a.uninstall, a.dry_run)
+
+
 def cmd_ingest(a):
     print(ingest.ingest_all())
 
@@ -98,7 +106,7 @@ def cmd_prefs(a):
 def cmd_design(a):
     from . import design
     db = index.connect()
-    product = a.product or design.default_product(db, os.path.basename(os.getcwd().rstrip("/")))
+    product = a.product or design.default_product(db, config.path_name(os.getcwd()))
     print(design.render(db, product, " ".join(a.text), a.all))
 
 
@@ -143,7 +151,7 @@ def cmd_verify(a):
 
 def cmd_handoff(a):
     from . import handoff
-    kw = a.project or os.path.basename(os.getcwd().rstrip("/"))
+    kw = a.project or config.path_name(os.getcwd())
     print(handoff.draft(index.connect(), kw, a.since or ""))
 
 
@@ -156,7 +164,7 @@ def cmd_doctor(a):
 
 def cmd_off(a):
     config.STATE.mkdir(parents=True, exist_ok=True)
-    (config.STATE / "disabled").write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n")
+    (config.STATE / "disabled").write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     print("evenfall is OFF: hooks, the watcher and the scheduled sync do nothing. `evenfall on` resumes (run `evenfall sync` to catch up).")
 
 
@@ -187,12 +195,17 @@ def cmd_rebuild(a):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):      # the card and search hits hold non-ASCII text; Windows consoles and pipes default to a legacy code page
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(prog="evenfall")
     sp = p.add_subparsers(dest="cmd", required=True)
     sp.add_parser("ingest").set_defaults(fn=cmd_ingest)
     sp.add_parser("index").set_defaults(fn=cmd_index)
     sy = sp.add_parser("sync")
-    sy.add_argument("--scheduled", action="store_true", help="called by launchd: do nothing while the kill switch is on")
+    sy.add_argument("--scheduled", action="store_true", help="called by the scheduler: do nothing while the kill switch is on")
     sy.set_defaults(fn=cmd_sync)
     f = sp.add_parser("find")
     f.add_argument("text", nargs="+")
@@ -253,6 +266,12 @@ def main(argv=None):
     h.add_argument("event", choices=["start", "sync", "end"])
     h.set_defaults(fn=cmd_hook)
     sp.add_parser("watch").set_defaults(fn=cmd_watch)
+    ins = sp.add_parser("install", help="install the Claude Code hooks, or the optional scheduled catch-up (launchd on macOS, Task Scheduler on Windows)")
+    ins.add_argument("what", choices=["hooks", "schedule"])
+    ins.add_argument("--uninstall", action="store_true")
+    ins.add_argument("--settings", help="hooks only: path to Claude Code settings.json (default ~/.claude/settings.json)")
+    ins.add_argument("--dry-run", action="store_true", help="schedule only: print what would be installed")
+    ins.set_defaults(fn=cmd_install)
     a, extra = p.parse_known_args(argv)
     if extra and a.cmd in ("find", "prefs", "design"):
         a.text += extra                      # words that start with a dash are search text, not options

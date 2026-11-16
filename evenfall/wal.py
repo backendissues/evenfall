@@ -2,24 +2,18 @@
 
 Layout of a segment:  MAGIC, then records of  [u32 length][u32 crc32][zlib(json)].
 A torn tail (power cut mid-write) is detected by length/CRC and cut off on the next open.
-Durability: commit() flushes with F_FULLFSYNC on macOS (os.fsync alone does not reach the disk there).
+Durability: commit() flushes with F_FULLFSYNC on macOS (os.fsync alone does not reach the disk there); see _compat.full_sync.
 """
-import fcntl
 import json
 import os
 import struct
 import zlib
 
+from . import _compat
+
 MAGIC = b"ENGRAMW1"   # file-format marker: kept from the tool's first name so existing archives stay readable
 HDR = struct.Struct(">II")
 MAX_RECORD = 64 * 1024 * 1024
-
-
-def _full_sync(fd: int) -> None:
-    if hasattr(fcntl, "F_FULLFSYNC"):
-        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
-    else:
-        os.fsync(fd)
 
 
 def encode(rec: dict) -> bytes:
@@ -83,7 +77,7 @@ class Segment:
                 new = True
             elif good < os.path.getsize(self.path):
                 os.truncate(self.path, good)          # repair a torn tail
-        self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | _compat.O_BINARY, 0o600)
         self.buf = []
         if new:
             os.write(self.fd, MAGIC)
@@ -104,13 +98,9 @@ class Segment:
             self.buf = []
 
     def sync(self) -> None:
-        _full_sync(self.fd)
+        _compat.full_sync(self.fd)
         if self._new:                                 # make the new directory entry durable too
-            dfd = os.open(os.path.dirname(self.path), os.O_RDONLY)
-            try:
-                _full_sync(dfd)
-            finally:
-                os.close(dfd)
+            _compat.sync_dir(os.path.dirname(self.path))
             self._new = False
 
     def close(self) -> None:

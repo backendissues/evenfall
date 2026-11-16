@@ -32,7 +32,7 @@ def _entropy(s: str) -> float:
 
 def _looks_secret(s: str) -> bool:
     """High-entropy and not shaped like a path or identifier (paths, tool names and slugs are not secrets)."""
-    if s.startswith("/") or s.count("/") >= 3 or "__" in s or s.count("-") + s.count("_") >= 4:
+    if s.startswith("/") or s.count("/") >= 3 or re.match(r"[A-Za-z]:[\\/]", s) or s.count("\\") >= 2 or "__" in s or s.count("-") + s.count("_") >= 4:
         return False
     return _entropy(s) >= 4.5
 

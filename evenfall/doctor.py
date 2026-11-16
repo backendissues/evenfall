@@ -1,5 +1,4 @@
 """Health checks. `evenfall doctor` prints all of them; `quick()` is the cheap subset the SessionStart card uses to raise a warning."""
-import fcntl
 import json
 import os
 import shutil
@@ -8,28 +7,21 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, wal
+from . import _compat, config, wal
 
-LABEL = "com.evenfall.sync"
-PLIST = Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist")
 SETTINGS = Path(config._env("SETTINGS") or Path.home() / ".claude" / "settings.json")
 EVENTS = ("SessionStart", "PreCompact", "SessionEnd")
 LAG_WARN, LAG_FAIL = 300, 1800            # seconds a transcript can run ahead of the archive
 
 
-def _bin() -> str:
-    from . import brief
-    return brief.BIN
-
-
 def hooks_installed() -> list:
     """Hook events missing an evenfall entry in Claude Code's settings."""
     try:
-        hooks = json.loads(SETTINGS.read_text()).get("hooks", {})
+        hooks = json.loads(SETTINGS.read_text(encoding="utf-8")).get("hooks", {})
     except (OSError, ValueError):
         return list(EVENTS)
-    b = _bin()
-    return [ev for ev in EVENTS if not any(h.get("command", "").startswith(b) for g in hooks.get(ev, []) for h in g.get("hooks", []))]
+    from . import brief
+    return [ev for ev in EVENTS if not any(brief.is_hook_command(h.get("command", "")) for g in hooks.get(ev, []) for h in g.get("hooks", []))]
 
 
 def lag_seconds(db) -> float:
@@ -49,7 +41,7 @@ def recent_errors(hours: int = 24) -> list:
     """Timestamped header lines of hook-errors.log newer than `hours`."""
     log = config.STATE / "hook-errors.log"
     try:
-        lines = log.read_text().splitlines()
+        lines = log.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
     cutoff, out = time.time() - hours * 3600, []
@@ -66,7 +58,7 @@ def recent_errors(hours: int = 24) -> list:
 def last_error_line() -> str:
     log = config.STATE / "hook-errors.log"
     try:
-        lines = [l for l in log.read_text().splitlines() if l.strip()]
+        lines = [l for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
     except OSError:
         return ""
     return lines[-1][:160] if lines else ""
@@ -97,14 +89,6 @@ def card_warning(db) -> str:
     return ("Evenfall warning: " + "; ".join("%s: %s" % (n, d) for _l, n, d in bad) + ". Run `evenfall doctor`.") if bad else ""
 
 
-def _launchd_loaded() -> bool:
-    try:
-        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=5)
-        return LABEL in r.stdout
-    except Exception:
-        return False
-
-
 def run(db, deep: bool = False) -> list:
     res = list(quick(db))
     seen = {n for _l, n, _d in res}
@@ -119,11 +103,11 @@ def run(db, deep: bool = False) -> list:
     try:
         fd = os.open(config.STATE / "watcher.lock", os.O_WRONLY | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            res.append(("OK", "watcher", "not running (it starts with the next session and exits when idle)"))
-        except BlockingIOError:
-            res.append(("OK", "watcher", "running"))
+            if _compat.try_lock(fd):
+                _compat.unlock(fd)
+                res.append(("OK", "watcher", "not running (it starts with the next session and exits when idle)"))
+            else:
+                res.append(("OK", "watcher", "running"))
         finally:
             os.close(fd)
     except OSError:
@@ -135,13 +119,14 @@ def run(db, deep: bool = False) -> list:
     free = shutil.disk_usage(config.HOME if config.HOME.exists() else Path.home()).free / 1e9
     res.append(("FAIL" if free < 1 else "WARN" if free < 5 else "OK", "disk", "%.1f GB free" % free))
     try:
-        days = json.loads(SETTINGS.read_text()).get("cleanupPeriodDays")
+        days = json.loads(SETTINGS.read_text(encoding="utf-8")).get("cleanupPeriodDays")
     except (OSError, ValueError):
         days = None
     res.append(("OK", "retention", "cleanupPeriodDays=%s" % days) if (days or 0) >= 365 else
                ("WARN", "retention", "cleanupPeriodDays=%s: Claude Code may delete transcripts before evenfall archives them" % days))
-    res.append(("OK", "launchd", "catch-up agent loaded (every 60 s)") if _launchd_loaded() else
-               ("WARN", "launchd", "catch-up agent not installed; run bin/install-launchd"))
+    from . import installer
+    res.append(("OK", "catch-up", "scheduled sync is installed (every 60 s)") if installer.schedule_loaded() else
+               ("WARN", "catch-up", "scheduled sync not installed; run `evenfall install schedule` (optional: the watcher already captures)"))
     return res
 
 

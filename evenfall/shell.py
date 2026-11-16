@@ -29,7 +29,7 @@ def command_names(cmd: str) -> list:
             continue
         if fresh:
             fresh = False
-            base = t.split("/")[-1]
+            base = re.split(r"[\\/]", t)[-1]
             if "=" in t or base in KEYWORDS or not CMD_NAME.match(base):
                 fresh = "=" in t or base in COMMAND_FOLLOWS
                 continue
