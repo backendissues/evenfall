@@ -9,7 +9,7 @@ from . import config
 
 GENERIC = {"project", "portal", "site", "system", "plan", "sales", "memory", "build", "marketplace"}
 STALE_ACTIONS = 5                 # this many outward-facing actions since the memory was last edited
-COMMIT_MSG = re.compile(r'git commit[^"\']*?-m\s+(?:"((?:[^"\\]|\\.)*)|\'([^\']*))')
+COMMIT_MSG = re.compile(r'git commit[^"\']*?\s(?:-[a-zA-Z]*m|--message)[\s=]+(?:"((?:[^"\\]|\\.)*)|\'([^\']*))')   # -m, -am and --message
 
 
 def _front(text: str, key: str) -> str:
@@ -89,8 +89,8 @@ def draft(db, keyword: str, since: str = "") -> str:
         if key not in groups:
             groups[key] = []; order.append(key)
         groups[key].append((ts, st, op, summ))
-    lines = ["Draft update for the %s memory, %s to %s (%d outward actions). Edit before saving; keep only what is non-obvious." % (
-        keyword, since[:10], rows[-1][1][:10], len(rows)), ""]
+    lines = ["Draft update for the %s memory, %s to %s (%d outward action%s). Edit before saving; keep only what is non-obvious." % (
+        keyword, since[:10], rows[-1][1][:10], len(rows), "" if len(rows) == 1 else "s"), ""]
     for key in order:
         g = groups[key]
         ops = {}

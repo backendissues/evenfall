@@ -456,6 +456,9 @@ class HandoffTests(Base):
         self.assertIn("7 outward actions", d)
         self.assertIn("deploy acme change 0. Alternative rejected: wait.", d)
         self.assertIn("commit: acme change 3", d)
+        m = handoff.COMMIT_MSG.search('cd ~/acme && git commit -q -am "combined flags work" && git push')
+        self.assertEqual(m.group(1), "combined flags work")
+        self.assertEqual(handoff.COMMIT_MSG.search("git commit --message='long form'").group(2), "long form")
         self.assertIn("git push x", d)
         self.assertIn("No outward-facing actions", handoff.draft(self.db, "nothing-here"))
 
