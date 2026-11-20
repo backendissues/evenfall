@@ -22,7 +22,7 @@ bin/evenfall doctor            # confirm healthy
 
 On Windows use `py -3 -m evenfall` in place of `bin/evenfall`. Set `cleanupPeriodDays` high in Claude Code settings, or transcripts may be deleted before they are archived. Optional catch-up every 60 s: `install schedule`. Remove with `install hooks --uninstall`. Pause with `evenfall off`, resume with `evenfall on`.
 
-If a search returns nothing unexpected, run `evenfall doctor` and check `~/.evenfall/state/hook-errors.log`.
+If searches return nothing for sessions you know exist, run `evenfall doctor` and check `~/.evenfall/state/hook-errors.log`.
 
 ## Searching
 
